@@ -1,0 +1,2 @@
+# -Data-Driven-Insights-in-Auto-Insurance-Predicting-Claims-and-Enhancing-Customer-Retention
+Auto Insurance: Predictive Segmentation for Claims &amp; Retention Developed clustering and classification models to dynamically segment customers for an auto insurance company. Enabled personalized engagement strategies to boost retention, reduce churn, and maximize lifetime value. Tools: Python, SQL, Tableau.
