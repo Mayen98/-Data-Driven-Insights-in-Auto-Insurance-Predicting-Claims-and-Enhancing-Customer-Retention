@@ -1,0 +1,291 @@
+---
+title: "Capstone Active"
+author: "Mayen Udoffia"
+date: "2024-11-24"
+output: html_document
+---
+
+```{r}
+# Load necessary libraries
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+library(tidyr)
+library(caret)
+library(cluster)
+library(RColorBrewer)
+library(randomForest)
+
+```
+
+
+
+```{r}
+insurance_data = read_excel("C:/Users/Owner/Downloads/Capstone Dataset/Insurance Data.xlsx")
+str(insurance_data)
+```
+**Data Cleaning**
+```{r}
+insurance_data <- insurance_data %>%
+  #  Remove duplicates
+  distinct() %>%
+  
+  #  Handle missing values
+  # Drop rows with missing values in essential columns
+  filter(!is.na(Customer), !is.na(State), !is.na(`Customer Lifetime Value`)) %>%
+  
+  # Fill numeric columns with median and categorical columns with mode
+  mutate(across(where(is.numeric), ~ ifelse(is.na(.), median(., na.rm = TRUE), .)),
+         across(where(is.character), ~ ifelse(is.na(.), names(sort(table(.), decreasing = TRUE))[1], .))) %>%
+  
+  #  Standardize data types
+  mutate(`Effective To Date` = as.Date(`Effective To Date`, format = "%Y-%m-%d"),
+         `Customer Lifetime Value` = as.numeric(`Customer Lifetime Value`)) %>%
+  
+  # Clean categorical columns (capitalize first letter of each word)
+  mutate(across(where(is.character), ~ tools::toTitleCase(trimws(.)))) %>%
+  
+  #  Remove irrelevant columns
+   select(-Customer)
+
+
+
+# Replace all spaces in column names with underscores or remove spaces entirely
+names(insurance_data) <- gsub(" ", "", names(insurance_data))
+# View the cleaned data
+head(insurance_data)
+
+
+
+```
+
+
+**Handling Outliers**
+```{r}
+# Function to cap outliers based on percentiles
+cap_outliers <- function(data, column, lower_percentile = 0.01, upper_percentile = 0.99) {
+  lower_bound <- quantile(data[[column]], probs = lower_percentile, na.rm = TRUE)
+  upper_bound <- quantile(data[[column]], probs = upper_percentile, na.rm = TRUE)
+  data[[column]] <- ifelse(data[[column]] < lower_bound, lower_bound, 
+                           ifelse(data[[column]] > upper_bound, upper_bound, data[[column]]))
+  return(data)
+}
+
+# List of columns to cap
+columns_to_cap <- c("CustomerLifetimeValue", "Income", "TotalClaimAmount")
+
+# Apply capping for each column
+for (col in columns_to_cap) {
+  insurance_data <- cap_outliers(insurance_data, col)
+}
+
+# View summary of the capped dataset
+summary(insurance_data)
+
+
+```
+```{r}
+# Function for Min-Max Scaling
+min_max_scale <- function(column) {
+  return((column - min(column, na.rm = TRUE)) / (max(column, na.rm = TRUE) - min(column, na.rm = TRUE)))
+}
+
+# Apply Min-Max Scaling to the relevant columns
+columns_to_normalize <- c("CustomerLifetimeValue", "Income", "TotalClaimAmount")
+
+for (col in columns_to_normalize) {
+  insurance_data[[col]] <- min_max_scale(insurance_data[[col]])
+}
+
+# View normalized dataset
+summary(insurance_data)
+
+
+```
+
+
+
+```{r}
+str(insurance_data)
+
+```
+
+
+
+```{r}
+colnames(insurance_data)
+
+str(insurance_data)
+```
+
+
+**Clustering Analysis**
+```{r}
+clustering_data <- insurance_data %>%
+  select(CustomerLifetimeValue, TotalClaimAmount, Income, Coverage, 
+         NumberofPolicies, PolicyType, RenewOfferType, 
+         VehicleClass, VehicleSize, NumberofOpenComplaints)
+
+
+# Convert character columns to numeric via factor encoding
+clustering_data$Coverage <- as.numeric(factor(clustering_data$Coverage))
+clustering_data$PolicyType <- as.numeric(factor(clustering_data$PolicyType))
+clustering_data$RenewOfferType <- as.numeric(factor(clustering_data$RenewOfferType))
+clustering_data$VehicleClass <- as.numeric(factor(clustering_data$VehicleClass))
+clustering_data$VehicleSize <- as.numeric(factor(clustering_data$VehicleSize))
+
+# Determine the optimal number of clusters using the Elbow Method
+wss <- sapply(1:10, function(k) {
+  kmeans(clustering_data, centers = k, nstart = 10)$tot.withinss
+})
+
+# Perform K-Means clustering with the optimal number of clusters
+set.seed(123) 
+kmeans_result <- kmeans(clustering_data, centers = 4, nstart = 25)
+# Plot the Elbow Method chart
+library(ggplot2)
+elbow_plot <- data.frame(Clusters = 1:10, WSS = wss)
+ggplot(elbow_plot, aes(x = Clusters, y = WSS)) +
+  geom_line() +
+  geom_point() +
+  ggtitle("Elbow Method to Determine Optimal Clusters") +
+  xlab("Number of Clusters") +
+  ylab("Within-Cluster Sum of Squares")
+
+
+
+
+# Calculate silhouette scores
+silhouette_scores <- silhouette(kmeans_result$cluster, dist(clustering_data))
+
+# Convert silhouette object to a data frame for easier handling 
+silhouette_df <- as.data.frame(silhouette_scores)
+
+# Plot the silhouette scores
+plot(silhouette_scores,
+     main = "Silhouette Plot for K-Means Clustering",
+     xlab = "Cluster",
+     ylab = "Silhouette Width",
+     col = 1:max(kmeans_result$cluster))
+
+# Summary of silhouette scores
+silhouette_summary <- summary(silhouette_scores)
+print(silhouette_summary)
+
+# Average silhouette width
+avg_silhouette_width <- silhouette_summary$avg.width
+cat("Average Silhouette Width:", avg_silhouette_width, "\n")
+
+```
+
+
+```{r}
+
+
+# Add cluster assignments to clustering_data (not just insurance_data)
+clustering_data <- as.data.frame(clustering_data)  # Ensure it's a data frame
+clustering_data$Cluster <- kmeans_result$cluster
+
+# View the first few rows of clustering_data with cluster assignments
+head(clustering_data)
+
+# Summarize the number of data points in each cluster
+cluster_counts <- table(clustering_data$Cluster)
+print(cluster_counts)
+
+# Analyze and summarize cluster characteristics
+cluster_summary <- clustering_data %>%
+  group_by(Cluster) %>%  
+  summarise(across(where(is.numeric), mean, na.rm = TRUE))
+
+# View the summary
+print(cluster_summary)
+
+
+
+```
+
+```{r}
+pca_result <- prcomp(clustering_data, center = TRUE, scale. = TRUE)
+pca_data <- data.frame(pca_result$x[, 1:2])  
+pca_data$Cluster <- as.factor(kmeans_result$cluster)  # Add cluster assignments
+
+
+palette <- brewer.pal(n = 4, name = "Set2")
+
+# Plot the clusters
+ggplot(pca_data, aes(x = PC1, y = PC2, color = Cluster)) +
+  geom_point(size = 2, alpha = 0.8) +
+  scale_color_manual(values = palette) +  
+  labs(title = "Cluster Visualization (PCA)", 
+       x = "Principal Component 1", 
+       y = "Principal Component 2", 
+       color = "Cluster") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    legend.title = element_text(face = "bold"),
+    legend.text = element_text(size = 10)
+  )
+
+
+
+```
+**Predictive Analysis**
+```{r}
+insurance_data$Cluster <- kmeans_result$cluster
+
+# Keep only demographic variables and the cluster column
+insurance_data_predictors <- insurance_data %>%
+  select(State, Gender, Income, MaritalStatus, Education,LocationCode, 
+         VehicleClass, VehicleSize, Cluster)
+
+insurance_data_predictors$Cluster <- as.factor(insurance_data_predictors$Cluster)
+
+
+
+set.seed(42)  # For reproducibility
+train_index <- createDataPartition(insurance_data_predictors$Cluster, p = 0.7, list = FALSE)
+train_data <- insurance_data_predictors[train_index, ]
+test_data <- insurance_data_predictors[-train_index, ]
+
+
+
+
+# Train the Random Forest model
+rf_model <- randomForest(Cluster ~ ., data = train_data, ntree = 100, importance = TRUE)
+importance(rf_model)
+varImpPlot(rf_model)
+```
+
+```{r}
+predictions <- predict(rf_model, newdata = test_data)
+
+confusionMatrix(predictions, test_data$Cluster)
+
+
+new_customers <- data.frame(State = c("California", "Nevada"),
+                            Gender = c("M", "F"),
+                            Income = c(60000, 45000),
+                            MaritalStatus = c("Married", "Single"),
+                            Education = c("Bachelor", "High School"),
+                            LocationCode = c("Suburban", "Urban"),
+                            VehicleClass = c("SUV", "Four-Door Car"),
+                            VehicleSize = c("Medsize", "Medsize"))
+
+
+new_customer_predictions <- predict(rf_model, newdata = new_customers)
+new_customer_predictions
+
+```
+```{r}
+cluster_features <- clustering_data %>%
+  group_by(Cluster) %>%
+  summarise(across(where(is.numeric), mean, na.rm = TRUE))
+
+print(cluster_features)
+
+```
+
+
